@@ -1,0 +1,207 @@
+# -*- coding: utf-8; mode: org-development-elisp; -*-
+#+title: cl-bytes
+#+subtitle: CL operations with bytes in integers in Emacs Lisp
+#+author: =#<PERSON akater A24961DE3ADD04E057ADCF4599555CE6F2E1B21D>=
+#+property: header-args :tangle cl-bytes.el :lexical t
+#+startup: nologdone show2levels
+#+todo: TODO(t@) HOLD(h@/!) | DONE(d@)
+#+todo: BUG(b@/!) | FIXED(x@)
+#+todo: TEST(u) TEST-FAILED(f) | TEST-PASSED(p)
+#+todo: DEPRECATED(r@) | OBSOLETE(o@)
+
+* Overview
+Just some missing functionality from Common Lisp.
+
+* byte
+** Examples
+*** Basic Examples
+*** TEST-PASSED 4 bits starting at 3rd (counting from 0) position
+#+begin_src elisp :tangle no :results code :wrap example elisp
+(= #b1001 (cl-ldb (cl-byte 4 3) #b1111001111))
+#+end_src
+
+#+EXPECTED:
+#+begin_example elisp
+t
+#+end_example
+
+** Prerequisites
+*** byte-specifier
+**** Notes
+Maybe ~cl--byte-specifier~ would be better, as byte- is byte compiler's prefix.
+
+**** Dependencies
+#+begin_src elisp :results none
+(eval-when-compile (require 'cl-lib))
+#+end_src
+
+**** Definition
+#+begin_src elisp :results none
+(cl-defstruct byte-specifier
+  "Byte specifier"
+  (size 0 :type (integer 0))
+  (position 0 :type (integer 0)))
+#+end_src
+
+** Definition
+#+begin_src elisp :results none
+(defun cl-byte (size position)
+  (make-byte-specifier :size size :position position))
+#+end_src
+
+** Tests
+*** TEST-PASSED Just a structure
+#+begin_src elisp :tangle no :results code :wrap example elisp
+(cl-byte 100 200)
+#+end_src
+
+#+EXPECTED:
+#+begin_example elisp
+#s(byte-specifier 100 200)
+#+end_example
+
+* Accessors
+** Definition
+#+begin_src elisp :results none
+(defalias 'cl-byte-size 'byte-specifier-size)
+(defalias 'cl-byte-position 'byte-specifier-position)
+#+end_src
+
+** Tests
+*** TEST-PASSED Size is the first one
+#+begin_src elisp :tangle no :results code :wrap example elisp
+(cl-byte-size (cl-byte 100 200))
+#+end_src
+
+#+EXPECTED:
+#+begin_example elisp
+100
+#+end_example
+
+* ldb, dpb
+** Examples
+*** Basic Examples
+**** TEST-PASSED From CLHS
+#+begin_src elisp :tangle no :results code :wrap example elisp
+(let (a)
+  (cl-values
+   (cl-ldb (cl-byte 2 1) 10)
+   (cl-copy-list (setq a (list 8)))
+   (setf (cl-ldb (cl-byte 2 1) (car a)) 1)
+   a))
+#+end_src
+
+#+EXPECTED:
+#+begin_example elisp
+(1
+ (8)
+ 1
+ (10))
+#+end_example
+
+**** TEST-PASSED From CLHS, macroexpansion
+#+begin_src elisp :tangle no :results macroexp :wrap example elisp :keep-expected t
+(setf (cl-ldb (cl-byte 2 1) (car a)) 1)
+#+end_src
+
+#+EXPECTED:
+#+begin_example elisp
+(let* ((b (cl-byte 2 1)))
+  (progn
+    (setf (car a)
+          (cl-dpb 1 b (car a)))
+    1))
+#+end_example
+
+** Definition
+#+begin_src elisp :results none
+(defun cl--%dpb (newbyte size posn integer)
+  ;; (declare (type bit-index size posn) (explicit-check))
+  (let ((mask (1- (ash 1 size))))
+    (logior (logand integer (lognot (ash mask posn)))
+            (ash (logand newbyte mask) posn))))
+
+(defun cl-dpb (newbyte bytespec integer)
+  (cl--%dpb newbyte
+            (cl-byte-size bytespec)
+            (cl-byte-position bytespec)
+            integer))
+
+(defun cl--%ldb (size posn integer)
+  ;; The naive algorithm is horrible in the general case.
+  ;; Consider (LDB (BYTE 1 2) (SOME-GIANT-BIGNUM)) which has to shift the
+  ;; input rightward 2 bits, consing a new bignum just to read 1 bit.
+  (logand (ash integer (- posn))
+          (1- (ash 1 size))))
+
+(defun cl-ldb (bytespec integer)
+  (cl--%ldb (cl-byte-size bytespec)
+            (cl-byte-position bytespec)
+            integer))
+#+end_src
+
+** setf Definition
+*** Notes
+setf dpb is not implemented because not needed
+
+*** Dependencies
+#+begin_src elisp :results none
+(eval-when-compile (require 'gv)
+                   (require 'macroexp))
+#+end_src
+
+*** setf
+#+begin_src elisp :results none
+(gv-define-expander cl-ldb
+  (lambda (do bytespec place)
+    (macroexp-let2 nil b bytespec
+      (funcall do place
+               (lambda (v)
+                 (macroexp-let2 nil n v
+                   `(progn (setf ,place (cl-dpb ,n ,b ,place)) ,n)))))))
+#+end_src
+
+** Tests
+*** TEST-PASSED Macroexpansion
+#+begin_src elisp :tangle no :results macroexp :wrap example elisp :keep-expected t
+(setf (cl-ldb bytespec value) new)
+#+end_src
+
+#+EXPECTED:
+#+begin_example elisp
+(let* ((b bytespec) (n new))
+  (progn
+    (setf value (cl-dpb n b value))
+    n))
+#+end_example
+
+*** TEST-PASSED CLHS Test 1
+#+begin_src elisp :tangle no :results code :wrap example elisp
+(cl-dpb 1 (cl-byte 1 10) 0)
+#+end_src
+
+#+EXPECTED:
+#+begin_example elisp
+1024
+#+end_example
+
+*** TEST-PASSED CLHS Test 2
+#+begin_src elisp :tangle no :results code :wrap example elisp
+(cl-dpb -2 (cl-byte 2 10) 0)
+#+end_src
+
+#+EXPECTED:
+#+begin_example elisp
+2048
+#+end_example
+
+*** TEST-PASSED CLHS Test 3
+#+begin_src elisp :tangle no :results code :wrap example elisp
+(cl-dpb 1 (cl-byte 2 10) 2048)
+#+end_src
+
+#+EXPECTED:
+#+begin_example elisp
+1024
+#+end_example
+
