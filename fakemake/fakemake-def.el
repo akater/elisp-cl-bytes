@@ -2,7 +2,7 @@
 
 (defconst-with-prefix fakemake
   feature 'cl-bytes
-  authors "Dima Akater"
+  authors "Dima Akater" author-email "nuclearspace@gmail.com"
   first-publication-year-as-string "2023"
   org-files-in-order '("cl-bytes")
   site-lisp-config-prefix "50"
