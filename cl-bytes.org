@@ -10,14 +10,79 @@
 #+todo: DEPRECATED(r@) | OBSOLETE(o@)
 
 * Overview
-Just some missing functionality from Common Lisp.
+Just some functionality from Common Lisp missing in ~cl-lib~.
+
+Provides ~cl-byte~, ~cl-byte-size~, ~cl-byte-position~, ~cl-dpb~, ~cl-ldb~, ~(setf cl-ldb)~.
+
+The code is mostly ported from [[https://sbcl.org][SBCL]].
+
+* Installation
+** Gentoo
+Add the ebuild repository and install from there:
+#+begin_src sh :dir /sudo::/ :tangle no :results none
+eselect repository enable akater
+emerge app-emacs/cl-bytes
+#+end_src
+
+** Other systems
+*** Use ~package-vc~ (Emacs 29 and later)…
+#+begin_src elisp :tangle no :results none
+(package-vc-install
+ '( cl-bytes
+    :url "https://framagit.org/akater/elisp-cl-bytes"
+    :branch "elpa-release"))
+#+end_src
+
+*** …or install manually
+Clone ~cl-bytes~, switch to =release= branch.
+
+~cl-bytes~ can be installed into system-wide directory =/usr/share/emacs/site-lisp= (or wherever your ~SITELISP~ envvar points to) with
+#+begin_src sh :tangle no :results none
+make && sudo make install
+#+end_src
+but it's best to define a package for your package manager to do this instead.
+
+If your package manager can't do that, and you don't want to install with elevated permissions, do
+#+begin_src sh :tangle no :results none
+SITELISP=~/.config/emacs/lisp SITEETC=~/.config/emacs/etc make && \
+DESTDIR=~/.config/emacs SITELISP=/lisp SITEETC=/etc make install
+#+end_src
+(you may simply eval this block with =C-c C-c=; it won't be informative if it fails but hopefully it'll work)
+
+In any case, you'll have to add load-path to your config, as demonstrated in [[Suggested config]].
+
+** Notes for contiributors
+If you have a local version of repository, compile with
+#+begin_example sh :tangle no :results none
+ORG_LOCAL_SOURCES_DIRECTORY="/home/contributor/src/elisp-cl-bytes"
+#+end_example
+
+This will link function definitions to your local Org files.
+
+** Tests
+If you want to run tests for ~cl-bytes~, ensure the following dependencies are installed:
+- [[https://framagit.org/akater/org-run-tests][ORT]]
+- [[https://framagit.org/akater/org-src-elisp-extras][org-src-elisp-extras]]
+
+* Suggested config
+#+begin_example elisp
+(use-package cl-bytes :ensure nil :defer t
+  ;; Note: on Gentoo, or when using `package-vc',
+  ;; there is no need to specify load-path
+  :load-path "/usr/share/emacs/site-lisp/cl-bytes"
+  ;; or maybe
+  ;; :load-path "~/.config/emacs/lisp/cl-bytes"
+  )
+#+end_example
 
 * byte
 ** Examples
 *** Basic Examples
 *** TEST-PASSED 4 bits starting at 3rd (counting from 0) position
 #+begin_src elisp :tangle no :results code :wrap example elisp
-(= #b1001 (cl-ldb (cl-byte 4 3) #b1111001111))
+(= (cl-ldb (cl-byte 4 3)
+           #b1111001111)
+              #b1001)
 #+end_src
 
 #+EXPECTED:
@@ -38,7 +103,7 @@ Maybe ~cl--byte-specifier~ would be better, as byte- is byte compiler's prefix.
 **** Definition
 #+begin_src elisp :results none
 (cl-defstruct byte-specifier
-  "Byte specifier"
+  "Byte specifier."
   (size 0 :type (integer 0))
   (position 0 :type (integer 0)))
 #+end_src
@@ -46,6 +111,11 @@ Maybe ~cl--byte-specifier~ would be better, as byte- is byte compiler's prefix.
 ** Definition
 #+begin_src elisp :results none
 (defun cl-byte (size position)
+  "Return a byte of width SIZE w/ weights 2^POSITION + SIZE - 1 through 2^POSITION.
+
+Return a byte specifier that indicates a byte of width SIZE and
+whose bits have weights 2^POSITION + SIZE - 1 through
+2^POSITION."
   (make-byte-specifier :size size :position position))
 #+end_src
 
@@ -68,7 +138,7 @@ Maybe ~cl--byte-specifier~ would be better, as byte- is byte compiler's prefix.
 #+end_src
 
 ** Tests
-*** TEST-PASSED Size is the first one
+*** TEST-PASSED ~byte-size~ is the first one
 #+begin_src elisp :tangle no :results code :wrap example elisp
 (cl-byte-size (cl-byte 100 200))
 #+end_src
@@ -93,9 +163,9 @@ Maybe ~cl--byte-specifier~ would be better, as byte- is byte compiler's prefix.
 
 #+EXPECTED:
 #+begin_example elisp
-(1
+( 1
  (8)
- 1
+  1
  (10))
 #+end_example
 
@@ -122,6 +192,16 @@ Maybe ~cl--byte-specifier~ would be better, as byte- is byte compiler's prefix.
             (ash (logand newbyte mask) posn))))
 
 (defun cl-dpb (newbyte bytespec integer)
+  "Return an integer that is the same as INTEGER except in the BYTESPEC bits.
+
+Used to replace a field of bits within integer.
+
+“dpb” stands for “deposit byte”.
+
+Let s be the size specified by BYTESPEC; then the low s bits of
+NEWBYTE appear in the result in the byte specified by
+BYTESPEC. NEWBYTE is interpreted as being right-justified, as if
+it were the result of `cl-ldb'."
   (cl--%dpb newbyte
             (cl-byte-size bytespec)
             (cl-byte-position bytespec)
@@ -135,6 +215,18 @@ Maybe ~cl--byte-specifier~ would be better, as byte- is byte compiler's prefix.
           (1- (ash 1 size))))
 
 (defun cl-ldb (bytespec integer)
+  "Extract and return the byte of INTEGER specified by BYTESPEC.
+
+Return an integer in which the bits with weights 2^(s-1) through
+2^0 are the same as those in INTEGER with weights 2^(p+s-1)
+through 2^p, and all other bits zero; s is (cl-byte-size
+BYTESPEC) and p is (cl-byte-position BYTESPEC).
+
+`setf' may be used with `cl-ldb' to modify a byte within the
+INTEGER that is stored in a given place. The order of evaluation,
+when a `cl-ldb' form is supplied to `setf', is exactly
+left-to-right.  The effect is to perform a `cl-dpb' operation and
+then store the result back into the place."
   (cl--%ldb (cl-byte-size bytespec)
             (cl-byte-position bytespec)
             integer))
@@ -142,7 +234,7 @@ Maybe ~cl--byte-specifier~ would be better, as byte- is byte compiler's prefix.
 
 ** setf Definition
 *** Notes
-setf dpb is not implemented because not needed
+~(setf cl-dpb)~ is not implemented because I had not need for it yet.
 
 *** Dependencies
 #+begin_src elisp :results none
