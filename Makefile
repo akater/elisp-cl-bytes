@@ -47,6 +47,16 @@ test:
 all:
 	$(EVAL) "(fakemake 'all)"
 
+elpa-release: clean
+	$(EVAL) "(requiring (lisp-mnt package) (fakemake 'elpa-release))"
+	git add -Af
+	git stash save
+	git checkout elpa-release
+	git checkout stash './*' ':!./.gitignore' ':!./fakemake' ':!./Makefile'
+	git add -A
+	git commit -m "Automatic ELPA release by fakemake"
+	git stash drop
+
 install:
 	$(EMACS_INIT) --load install.el
 

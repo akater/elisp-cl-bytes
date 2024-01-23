@@ -89,7 +89,6 @@
     (let ((name (concat (fakemake-done-file-name-base operation) ".el"))
           (local-variables '(:lexical-binding t)))
       (apply #'elisp-insert-header (plist-with-keys name local-variables))
-      (comment-region (line-beginning-position) (line-end-position))
       (terpri (current-buffer))
       (terpri (current-buffer)))
     (when-let ((previous-operation

@@ -140,6 +140,18 @@ The first argument X is thus mandatory."
 
 (defsubst string-matched-p (x y) (string-match-p y x))
 
+(defmacro requiring (feature-specs &rest body)
+  (declare (indent 1))
+  `(progn
+     ,@(mapcar (lambda (spec)
+                 (cl-etypecase spec
+                   (null (error "A feature spec in `%s' must not be nil"
+                                'requiring))
+                   (cons `(require ,@spec))
+                   (symbol `(require ',spec))))
+               feature-specs)
+     ,@body))
+
 (cl-defmacro do-files-list ((var list &optional return)
                             ;; (var list &key return (if-not-exists 'message))
                             &body body)

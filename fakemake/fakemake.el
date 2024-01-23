@@ -1,6 +1,6 @@
 ;;;  -*- lexical-binding: t -*-
 
-;; Version: 20230711.234609
+;; Version: 20240122.193528
 
 (setq debugger-stack-frame-as-list t)
 
@@ -150,9 +150,7 @@ Meant to be set by fakemake.")
     ;; (fakemake-done-defvar fakemake-source-files-for-testing-in-order)
     ))
 
-(defun insert-gpl-3-license
-    (one-line-to-give-the-programs-name-and-an-idea-of-what-it-does
-     initial-year-as-string authors &optional buffer)
+(defun insert-gpl-3-license (initial-year-as-string authors &optional buffer)
   (setq buffer (or buffer (current-buffer)))
   (with-current-buffer (find-file-noselect
                         (expand-file-name "COPYING" fakemake-project-root))
@@ -164,9 +162,6 @@ Meant to be set by fakemake.")
        (rx line-start
            "<one line to give the program's name and a brief idea of what it does.>"))
       (let ((start (with-current-buffer buffer (point))))
-        (with-current-buffer buffer
-          (insert
-           one-line-to-give-the-programs-name-and-an-idea-of-what-it-does ?\n))
         (re-search-forward (rx line-start))
         (let ((copyright-pattern
                (if (not (looking-at-p "Copyright"))
@@ -230,9 +225,19 @@ Meant to be set by fakemake.")
   (cl-some (lambda (x) (file-exists-p+ (expand-file-name x directory)))
            '("COPYING" "LICENSE")))
 
-(cl-defun elisp-insert-header ( &key
-                                name description local-variables
-                                first-publication-year authors)
+(declare-function package-desc-extras "package")
+(declare-function package-desc-reqs "package")
+(declare-function package-desc-summary "package")
+
+(when (boundp 'fakemake-package-requires)
+  (fakemake-done-defvar fakemake-package-version
+    (format-time-string "0.0.%Y%m%d.%H%M%S")))
+
+(defun elisp-insert-file-header (name description &optional local-variables)
+  (insert ";;; "
+          ;; We should probably use comment- functions
+          ;; but I couldn't figure out this interface.
+          )
   (insert name)
   (when description (insert " --- " description))
   (when local-variables
@@ -243,58 +248,122 @@ Meant to be set by fakemake.")
                 (ensure-string value))
      (when tail (insert "; ")))
     (insert " -*-"))
-  (when (or authors first-publication-year)
-    (insert ?\n)
-    (insert "Copyright (C)")
-    (when first-publication-year
-      (insert ?\s
-              (let ((current-year (format-time-string "%Y")))
-                (fif (not (string-equal
-                           current-year
-                           first-publication-year))
-                  (lambda (first-year)
-                    (concat first-year "--" current-year))
-                  first-publication-year))))
-    (when authors (insert ?\s authors))))
+  (insert ?\n))
 
-(defun insert-elisp-preamble (tangled-file &optional local-variables)
+(cl-defun elisp-insert-header ( &key
+                                name description local-variables
+                                first-publication-year authors package-desc)
+  (elisp-insert-file-header name description local-variables)
+  (let ((start (point)))
+    (when (or authors first-publication-year)
+      (insert ?\n)
+      (insert "Copyright (C)")
+      (when first-publication-year
+        (insert ?\s
+                (let ((current-year (format-time-string "%Y")))
+                  (fif (not (string-equal
+                             current-year
+                             first-publication-year))
+                    (lambda (first-year)
+                      (concat first-year "--" current-year))
+                    first-publication-year))))
+      (when authors (insert ?\s authors)))
+    (when package-desc
+      (insert ?\n)
+      (cl-loop for (k . v) in (package-desc-extras package-desc)
+               when v
+               do (cl-case k
+                    (:authors
+                     (let ((multiple-authors-indent 0))
+                       (insert (format "Author%s: " (if (cdr v) "s" "")))
+                       (when (cdr v) (setq multiple-authors-indent
+                                           (current-column)))
+                       (if v (cl-flet ((insert-author (author)
+                                         (insert (format "%s <%s>\n"
+                                                         (car author)
+                                                         (cdr author)))))
+                               (insert-author (pop v))
+                               (cl-loop for a in v
+                                        do
+                                        (cl-loop repeat multiple-authors-indent
+                                                 do (insert ?\s))
+                                        (insert-author a)))
+                         "Unknown\n")))
+                    (:maintainer
+                     (insert "Maintainer: " (if v (format "%s <%s>\n"
+                                                          (car v) (cdr v))
+                                              "Unknown\n")))
+                    (:url
+                     (insert "URL: " v ?\n))))
+      (insert "Version: " fakemake-package-version ?\n)
+      (insert "Package-Requries: " (format "%S" (package-desc-reqs package-desc))
+              ?\n)
+      (cl-loop for (k . v) in (package-desc-extras package-desc)
+               do (cl-case k
+                    ((:authors :maintainer :url))
+                    (otherwise
+                     (insert (ensure-string k)
+                             (format ": %S\n" v))))))
+    (when (> (point) start) (comment-region start (point)))))
+
+(defun insert-elisp-preamble ( tangled-file
+                               &optional local-variables package-desc)
   (with-current-buffer (find-file-noselect tangled-file)
     (let ((org-file (file-exists-p+ (concat (file-name-sans-extension
                                              tangled-file)
                                             ".org"))))
       (let ((name (file-name-nondirectory tangled-file))
-            (description
-             (when org-file
-               (with-current-buffer (find-file-noselect org-file)
-                 (save-match-data
-                   (when (re-search-forward
-                          (rx line-start "#+description: ")
-                          nil t)
-                     (buffer-substring-no-properties
-                      (point) (line-end-position))))))))
+            (description (cond
+                          ;; Normally, such a function
+                          ;; would check its argument PACKAGE-DESC first
+                          ;; We check org-file first only because
+                          ;; fakemake is very specifically made for Org.
+                          (org-file
+                           (with-current-buffer (find-file-noselect org-file)
+                             (or (save-excursion
+                                   (goto-char (point-min))
+                                   (save-match-data
+                                     (when (re-search-forward
+                                            (rx line-start "#+description: ")
+                                            nil t)
+                                       (buffer-substring-no-properties
+                                        (point) (line-end-position)))))
+                                 (save-excursion
+                                   (goto-char (point-min))
+                                   (save-match-data
+                                     (when (re-search-forward
+                                            (rx line-start "#+subtitle: ")
+                                            nil t)
+                                       (buffer-substring-no-properties
+                                        (point) (line-end-position))))))))
+                          ((and package-desc
+                                (package-desc-summary package-desc))))))
+        ;; (when package-desc
+        ;;   ;; this setf can't be found
+        ;;   (setf (package-desc-summary package-desc) description))
         (setq local-variables (plist-put local-variables :lexical-binding t))
-        (let ((license (license-normalize
-                        (or (when org-file
-                              (with-current-buffer (find-file-noselect org-file)
-                                (save-match-data
-                                  (when (re-search-forward
-                                         (rx line-start "#+license: ")
-                                         nil t)
-                                    (buffer-substring-no-properties
-                                     (point) (line-end-position))))))
-                            (ignore-errors fakemake-license)))))
+        (let ((license (or (license-normalize
+                            (or (when org-file
+                                  (with-current-buffer (find-file-noselect org-file)
+                                    (save-match-data
+                                      (when (re-search-forward
+                                             (rx line-start "#+license: ")
+                                             nil t)
+                                        (buffer-substring-no-properties
+                                         (point) (line-end-position))))))
+                                (ignore-errors (stringp+ fakemake-license))))
+                           (ignore-errors fakemake-license))))
           (cond
            ((null license)
             (if (not fakemake-ignore-null-license)
                 (error "No license specified for %s" name)
               (goto-char (point-min))
-              (let ((start (point)))
-                (apply #'elisp-insert-header
-                       :first-publication-year
-                       fakemake-first-publication-year-as-string
-                       :authors fakemake-authors
-                       (plist-with-keys name description local-variables))
-                (comment-region start (point)))
+              (apply #'elisp-insert-header
+                     :first-publication-year
+                     fakemake-first-publication-year-as-string
+                     :authors fakemake-authors
+                     (plist-with-keys name description local-variables
+                                      package-desc))
               (save-buffer)))
            ((aand (string-equal "gpl-3.0" license)
                   (fakemake--license-file-exists-p)
@@ -319,22 +388,38 @@ Meant to be set by fakemake.")
                                          "Version 3" (not digit))))))))))
             ;; The obsessive case, left here mostly due to personal tastes
             (goto-char (point-min))
+            (apply #'elisp-insert-header
+                   (plist-with-keys name description local-variables
+                                    package-desc))
+            (insert ?\n)
             (insert-gpl-3-license
-             (with-temp-buffer
-               (apply #'elisp-insert-header
-                      (plist-with-keys name description local-variables))
-               (buffer-string))
              fakemake-first-publication-year-as-string
              fakemake-authors)
             (save-buffer))
-           ((fboundp 'lice)
-            (let ((start (point)))
+           ((eq 'custom license)
+            (let ((license-file (fakemake--license-file-exists-p)))
+              (cl-assert license-file)
               (apply #'elisp-insert-header
                      :first-publication-year
                      fakemake-first-publication-year-as-string
                      :authors fakemake-authors
-                     (plist-with-keys name description local-variables))
-              (comment-region start (point)))
+                     (plist-with-keys name description local-variables
+                                      package-desc))
+              (let ((start (point)))
+                (insert ?\n ?\n)
+                (let ((license-buffer (find-file-noselect license-file)))
+                  (insert-buffer-substring license-buffer)
+                  (kill-buffer license-buffer))
+                (comment-region start (point))))
+            (insert ?\n)
+            (save-buffer))
+           ((fboundp 'lice)
+            (apply #'elisp-insert-header
+                   :first-publication-year
+                   fakemake-first-publication-year-as-string
+                   :authors fakemake-authors
+                   (plist-with-keys name description local-variables
+                                    package-desc))
             (insert ?\n ?\n)
             (let ((lice:header-spec '(lice:insert-license))
                   (lice:program-name fakemake-feature-full-name))
@@ -344,13 +429,12 @@ Meant to be set by fakemake.")
             (let (license-file)
               (if (not (setq license-file (fakemake--license-file-exists-p)))
                   (error "Don't know how to deal with the license")
-                (let ((start (point)))
-                  (apply #'elisp-insert-header
-                         :first-publication-year
-                         fakemake-first-publication-year-as-string
-                         :authors fakemake-authors
-                         (plist-with-keys name description local-variables))
-                  (comment-region start (point)))
+                (apply #'elisp-insert-header
+                       :first-publication-year
+                       fakemake-first-publication-year-as-string
+                       :authors fakemake-authors
+                       (plist-with-keys name description local-variables
+                                        package-desc))
                 (insert ?\n ?\n)
                 (let* ((start (point))
                        (end (+ start
@@ -373,7 +457,7 @@ Meant to be set by fakemake.")
       (prin1 `(provide ',(intern (file-name-base file))) (current-buffer)))
     (insert ?\n ?\n
             (file-name-nondirectory file) " ends here")
-    (comment-region (line-beginning-position) (line-end-position))
+    (comment-region (line-beginning-position) (line-end-position) 3)
     (insert-newline-to-please-unix)
     (save-buffer) (kill-buffer))
   file)
@@ -806,16 +890,104 @@ Return a list whose CAR is the tangled file name."
      (with-org-links-redirection-to org-sources-directory
        (with-org-babel-tangle-appending ,@body))))
 
+(defvar fakemake-package-metadata-written nil)
+(defvar fakemake-maintainer nil)
+(defvar fakemake-package-url nil
+  "The home page of the package, if the feature represents such.")
+(defvar fakemake-feature-repository nil
+  "The repository where the feature is stored, without trailing slash.
+
+For example, “https://framagit.org/akater”.")
+(defvar fakemake-feature-repository-ecosystem-prefix nil
+  "A prefix to distingush the ecosystem / language used for the feature.
+
+For example, “elisp”.")
+(declare-function lm-version "lisp-mnt")
+
 (defvar fakemake-decorate-regexps-blacklist nil)
-(defun fakemake-decorate (tangled-file)
+(defun fakemake-decorate (tangled-file &optional for-elpa)
   "Post-process elisp-source file TANGLED-FILE."
   (unless (cl-member (file-relative-name tangled-file fakemake-project-root)
                      fakemake-decorate-regexps-blacklist
                      :test #'string-matched-p)
-    (insert-elisp-preamble tangled-file)
+    (insert-elisp-preamble
+     tangled-file nil
+     (when (and for-elpa
+                (string-equal (file-relative-name tangled-file
+                                                  fakemake-project-root)
+                              (format "%s.el" fakemake-feature)))
+       (when fakemake-package-metadata-written
+         (error "Metadata was already generated once"))
+       (setf fakemake-package-metadata-written t)
+       (package-desc-create
+        :name fakemake-feature
+        :version fakemake-package-version
+        :summary nil
+        :reqs
+        (mapcar
+         (lambda (s)
+           (cl-etypecase s
+             (cons s)
+             (symbol
+              (list s
+                    (cl-case s
+                      (emacs
+                       emacs-version)
+                      (otherwise
+                       (with-current-buffer (find-file-noselect
+                                             (locate-library
+                                              (concat (symbol-name s) ".el")))
+                         (aprog1 (lm-version)
+                           (unless (stringp it)
+                             (error
+                              "Can't determine version of dependency `%s'"
+                              s))))))))))
+         fakemake-package-requires)
+        :kind
+        ;; kind needs to be set
+        nil
+        :archive nil
+        :dir nil
+        :extras
+        `((:authors
+           ,(cl-etypecase fakemake-authors
+              (list fakemake-authors)
+              (string
+               (cons fakemake-authors
+                     (or (stringp+ fakemake-author-email)
+                         (error "Single author but no email provided; please set `%s'"
+                                'fakemake-author-email))))))
+          (:maintainer
+           ,@(cl-etypecase fakemake-maintainer
+               (null
+                (cons (or (stringp+ fakemake-authors)
+                          (error "Maintainer is not specified but no single author to presume a maintainer."))
+                      (or (stringp+ fakemake-author-email)
+                          (error "Single author but no email provided; please set `%s'"
+                                 'fakemake-author-email))))
+               (cons (unless (and (stringp (car fakemake-maintainer))
+                                  (stringp (cdr fakemake-maintainer)))
+                       (error "Maintainer should be specified as (author . email), both strings, but it's not"))
+                     fakemake-maintainer)
+               (string
+                (cons fakemake-maintainer
+                      (or (stringp+ fakemake-maintainer-email)
+                          (error "A maintainer's name is specified but no email provided; please set `%s' or use a cons value for `%s'"
+                                 'fakemake-maintainer-email
+                                 'fakemake-maintainer))))))
+          (:url .
+                ,(or fakemake-package-url
+                     (when (and fakemake-feature-repository
+                                fakemake-feature-repository-language-prefix)
+                       (concat fakemake-feature-repository "/"
+                               (aif fakemake-feature-repository-language-prefix
+                                   (concat it "-")
+                                 "")
+                               fakemake-feature)))))
+        :signed nil)))
     (insert-elisp-postamble tangled-file)))
 
-(defun fakemake-prepare ()
+(defun fakemake-prepare (&optional for-elpa)
   (let* (tangle-index
          (all-tangled-source-files
           (let (all-tangled-source-files)
@@ -858,7 +1030,7 @@ Return a list whose CAR is the tangled file name."
     (dolist (tangled-file all-tangled-source-files)
       (unless (aand (file-name-directory tangled-file)
                     (string-equal "site-gentoo.d" it))
-        (fakemake-decorate tangled-file))))
+        (fakemake-decorate tangled-file for-elpa))))
   (dolist (p fakemake-tangles) (nreversef (cdr p)))
   ;; For more consistent intermediate buildenvs,
   (fakemake-process-special-dirs)
@@ -1258,42 +1430,55 @@ Return a list whose CAR is the tangled file name."
   "Kill Emacs in the end (with appropriate error code) when LIVE is nil."
   (setq target (or target 'default))
   (let ((status
-         (condition-case err
-             (cl-ecase target
-               (default
-                 (fakemake 'compile live))
-               (all
-                (fakemake 'default t))
-               (clean
+         (progn
+           (setq backtrace-line-length 0)
+           (cl-ecase target
+             (default
+               (fakemake 'compile live))
+             (all
+              (fakemake 'default t))
+             (clean
+              (fakemake-message "making target %s" target)
+              (fakemake-clean))
+             (elpa-release
+              (fakemake-message "Making elpa release")
+              (fakemake 'default)
+              (fakemake-clean)
+              (or (fakemake-prepare 'for-elpa)
+                  (progn
+                    (fakemake-done-cache-variables 'prepare)
+                    nil)))
+             (prepare
+              (if-let ((prepared (fakemake-donep 'prepare)))
+                  (progn (fakemake-message "%s done:" target)
+                         (load prepared nil t)
+                         nil)
                 (fakemake-message "making target %s" target)
-                (fakemake-clean))
-               (prepare
-                (if-let ((prepared (fakemake-donep 'prepare)))
-                    (progn (fakemake-message "%s done:" target)
-                           (load prepared nil t)
-                           nil)
-                  (fakemake-message "making target %s" target)
-                  (when fakemake-use-lice-p (require 'lice))
-                  (or (fakemake-prepare)
-                      (progn
-                        (fakemake-done-cache-variables 'prepare)
-                        nil))))
-               (compile
-                (if-let ((compiled (fakemake-donep 'compile)))
-                    (progn (fakemake-message "%s done:" target)
-                           (load compiled nil t)
-                           nil)
-                  (fakemake-message "making target %s" target)
-                  (fakemake 'prepare t)
-                  (or (fakemake-compile)
-                      (progn (fakemake-done-cache-variables 'compile)
-                             nil))))
-               (test
-                (when fakemake-test-phase-enabled
-                  (fakemake-check-done compile
-                    "Source had not been compiled.  Testing prior to compilation is not supported.")
-                  (fakemake-test))))
-           (t err))))
+                (when fakemake-use-lice-p (require 'lice))
+                (or (fakemake-prepare)
+                    (progn
+                      (fakemake-done-cache-variables 'prepare)
+                      nil))))
+             (compile
+              (if-let ((compiled (fakemake-donep 'compile)))
+                  (progn (fakemake-message "%s done:" target)
+                         (load compiled nil t)
+                         nil)
+                (fakemake-message "making target %s" target)
+                (fakemake 'prepare t)
+                (or (fakemake-compile)
+                    (progn (fakemake-done-cache-variables 'compile)
+                           nil))))
+             (test
+              (when fakemake-test-phase-enabled
+                (fakemake-check-done compile
+                                     "Source had not been compiled.  Testing prior to compilation is not supported.")
+                (fakemake-test)))))))
+    ;; The remaining code is a remnant of times when we returned error sexps.
+    ;; Nowadays we mostly just exit with debugger's backtrace.
+    ;; This logic is nevertheless valid for “expected” errors
+    ;; which can still be preserved as sexps
+    ;; and returned by top-level `fakemake' calls.
     (cond
      ((null status)
       (fakemake-message "made target %s" target)
