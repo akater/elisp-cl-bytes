@@ -1,6 +1,6 @@
 ;;;  -*- lexical-binding: t -*-
 
-;; Version: 20240122.193528
+;; Version: 20240603.134558
 
 (setq debugger-stack-frame-as-list t)
 

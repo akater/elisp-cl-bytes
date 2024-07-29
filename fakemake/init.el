@@ -6,6 +6,10 @@
 
 ;; file-exists-p+ is defined in fakemake-done
 
+(defsubst consp+ (object)
+  "When (CONSP OBJECT) is non-nil, return OBJECT."
+  (when (consp object) object))
+
 (defsubst stringp+ (object)
   "When (STRINGP OBJECT) is non-nil, return OBJECT."
   (when (stringp object) object))
